@@ -6,18 +6,17 @@ import mss
 import numpy as np
 import pyautogui
 
-# Import shared variables and functions
 from utils import (
     CROP_H_PERCENT,
-    KEY_PRESS_DELAY,
     LOOP_LIMIT,
     LOWER_GREEN,
     LOWER_YELLOW,
+    MAX_HOLD_SECONDS,
     PARTITION_PERCENT,
     SCREEN_CAPTURE_DELAY,
     UPPER_GREEN,
     UPPER_YELLOW,
-    get_center_x,
+    get_x_coords,
 )
 
 pyautogui.FAILSAFE = True
@@ -26,8 +25,8 @@ pyautogui.FAILSAFE = True
 class BotState:
     def __init__(self):
         self.lock = threading.Lock()
-        self.action = None  
-        self.presses_left = 0  
+        self.action = None  # 'a', 'd', 'recast', or None
+        self.action_end_time = 0.0  # Timestamp of when to release the key
         self.is_running = True
         self.loops_remaining = LOOP_LIMIT
 
@@ -36,22 +35,41 @@ bot_state = BotState()
 
 
 def action_worker():
-    """Thread 2: Executes keystrokes and can be interrupted mid-sequence."""
+    """Thread 2: Manages interruptible time-based key holds."""
+    current_held_key = None
+
     while bot_state.is_running:
-        action_to_take = None
-
         with bot_state.lock:
-            if bot_state.presses_left > 0:
-                action_to_take = bot_state.action
-                bot_state.presses_left -= 1
+            action_to_take = bot_state.action
+            end_time = bot_state.action_end_time
 
-        if action_to_take == "a":
-            pyautogui.press("a")
-            time.sleep(KEY_PRESS_DELAY)
-        elif action_to_take == "d":
-            pyautogui.press("d")
-            time.sleep(KEY_PRESS_DELAY)
+        if action_to_take in ("a", "d"):
+            # Check if we still have time on the clock to hold this key
+            if time.time() < end_time:
+                # If we need to press a new key, let go of the old one first
+                if current_held_key != action_to_take:
+                    if current_held_key:
+                        pyautogui.keyUp(current_held_key)
+                    pyautogui.keyDown(action_to_take)
+                    current_held_key = action_to_take
+            else:
+                # Time expired! Release the key.
+                if current_held_key:
+                    pyautogui.keyUp(current_held_key)
+                    current_held_key = None
+
+                # Clear the action state so we don't keep evaluating it
+                with bot_state.lock:
+                    if bot_state.action == action_to_take:
+                        bot_state.action = None
+
+            time.sleep(0.01)
+
         elif action_to_take == "recast":
+            if current_held_key:
+                pyautogui.keyUp(current_held_key)
+                current_held_key = None
+
             print("[Action] Bars lost. Starting 1s wait/recast sequence...")
             time.sleep(1)
             pyautogui.press("f")
@@ -59,13 +77,22 @@ def action_worker():
 
             with bot_state.lock:
                 bot_state.action = None
-                bot_state.presses_left = 0
+
         else:
+            # Action is None (centered or waiting)
+            if current_held_key:
+                pyautogui.keyUp(current_held_key)
+                current_held_key = None
+
             time.sleep(0.01)
+
+    # --- Failsafe: Ensure keys are released when shutting down ---
+    if current_held_key:
+        pyautogui.keyUp(current_held_key)
 
 
 def vision_worker():
-    """Thread 1: Captures screen, calculates logic, and overwrites commands."""
+    """Thread 1: Captures screen and calculates hold times."""
     print("Starting Vision Thread in 3 seconds... Switch to game!")
     time.sleep(3)
 
@@ -73,48 +100,57 @@ def vision_worker():
 
     with mss.mss() as sct:
         monitor = sct.monitors[1]
-        
-        # --- OPTIMIZATION: Pre-calculate the bounding box outside the loop ---
+
         w, h = monitor["width"], monitor["height"]
         crop_h = int(h * CROP_H_PERCENT)
         start_w = int(w * PARTITION_PERCENT / 100)
         end_w = int(w * (100 - PARTITION_PERCENT) / 100)
         active_width = end_w - start_w
-        
+
+        deadzone_threshold = active_width * 0.02
+
         roi = {
             "top": monitor["top"],
             "left": monitor["left"] + start_w,
             "width": active_width,
-            "height": crop_h
+            "height": crop_h,
         }
 
         while bot_state.is_running:
-            # OPTIMIZATION: Only grab the specific Region of Interest (ROI)
             img = np.array(sct.grab(roi))
-            
-            # OPTIMIZATION: Drop the Alpha channel using array slicing (faster than cv2.cvtColor)
             img_bgr_cropped = img[:, :, :3]
 
             hsv = cv2.cvtColor(img_bgr_cropped, cv2.COLOR_BGR2HSV)
             mask_yellow = cv2.inRange(hsv, LOWER_YELLOW, UPPER_YELLOW)
             mask_green = cv2.inRange(hsv, LOWER_GREEN, UPPER_GREEN)
 
-            x_yellow = get_center_x(mask_yellow)
-            x_green = get_center_x(mask_green)
+            c_yellow, _, _ = get_x_coords(mask_yellow)
+            c_green, l_green, r_green = get_x_coords(mask_green)
 
             with bot_state.lock:
-                if x_yellow is not None and x_green is not None:
+                if c_yellow is not None and c_green is not None and l_green is not None and r_green is not None:
+                    if c_yellow >= l_green and c_yellow <= r_green:
+                        bot_state.action = None  # We are perfectly inside, do nothing
                     if not in_minigame:
                         in_minigame = True
                         if bot_state.loops_remaining > 0:
                             bot_state.loops_remaining -= 1
-                            print(f"[Vision] Minigame started! Remaining catches: {bot_state.loops_remaining}")
+                            print(
+                                f"[Vision] Minigame started! Remaining catches: {bot_state.loops_remaining}"
+                            )
 
-                    distance = abs(x_yellow - x_green)
-                    num_presses = max(1, round((distance / active_width) * 15))
+                    distance = abs(c_yellow - l_green) if c_yellow < c_green else abs(c_yellow - r_green)
 
-                    bot_state.action = "d" if x_yellow < x_green else "a"
-                    bot_state.presses_left = num_presses
+                    # NEW: Calculate hold duration instead of presses
+                    distance_ratio = distance / active_width
+                    hold_duration = distance_ratio * MAX_HOLD_SECONDS
+
+                    # Set a minimum hold time (e.g., 0.02s) so very tiny corrections still register in-game
+                    hold_duration = max(0.01, hold_duration)
+
+                    bot_state.action = "d" if c_yellow < c_green else "a"
+                    # Set the exact timestamp for when this action should expire
+                    bot_state.action_end_time = time.time() + hold_duration
 
                 else:
                     if in_minigame:
@@ -126,7 +162,6 @@ def vision_worker():
 
                     if bot_state.action != "recast" and bot_state.is_running:
                         bot_state.action = "recast"
-                        bot_state.presses_left = 1
 
             time.sleep(SCREEN_CAPTURE_DELAY)
 

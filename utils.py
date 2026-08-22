@@ -13,9 +13,10 @@ IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 # --- Configuration Variables ---
 CROP_H_PERCENT = 0.25  # 25% of the screen height
 PARTITION_PERCENT = 31  # Cuts off 31% from both left and right sides
-LOOP_LIMIT = 5  # For main.py: Set to -1 for infinite loop, or >0 for a count
+LOOP_LIMIT = 50  # For main.py: Set to -1 for infinite loop, or >0 for a count
 SCREEN_CAPTURE_DELAY = 0.05
 KEY_PRESS_DELAY = 0.01
+MAX_HOLD_SECONDS = 1.5
 
 # --- HSV Constants ---
 LOWER_YELLOW = np.array([20, 100, 100])
@@ -24,13 +25,24 @@ LOWER_GREEN = np.array([45, 100, 100])
 UPPER_GREEN = np.array([85, 255, 255])
 
 
-# --- Shared Functions ---
-def get_center_x(mask):
-    """Finds the X-coordinate center of the largest contour in a binary mask."""
+def get_x_coords(mask):
+    """Finds the center, left, and right X-coordinates of the largest contour."""
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if contours:
         largest = max(contours, key=cv2.contourArea)
+        
+        # 1. Get the bounding box to find the left and right edges
+        x, y, w, h = cv2.boundingRect(largest)
+        left_x = x
+        right_x = x + w
+        
+        # 2. Calculate the center of mass
         M = cv2.moments(largest)
         if M["m00"] != 0:
-            return int(M["m10"] / M["m00"])
-    return None
+            center_x = int(M["m10"] / M["m00"])
+            
+            # Return all three values as a tuple
+            return center_x, left_x, right_x
+            
+    # Return Nones if nothing is found
+    return None, None, None

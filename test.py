@@ -27,18 +27,18 @@ def run_test():
 
     with mss.mss() as sct:
         monitor = sct.monitors[1]
-        
+
         # Pre-calculate ROI
         w, h = monitor["width"], monitor["height"]
         crop_h = int(h * CROP_H_PERCENT)
         start_w = int(w * PARTITION_PERCENT / 100)
         end_w = int(w * (100 - PARTITION_PERCENT) / 100)
-        
+
         roi = {
             "top": monitor["top"],
             "left": monitor["left"] + start_w,
             "width": end_w - start_w,
-            "height": crop_h
+            "height": crop_h,
         }
 
         while True:

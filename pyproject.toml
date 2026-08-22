@@ -1,0 +1,19 @@
+[project]
+name = "nte-fishing"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "mss>=10.2.0",
+    "numpy>=2.5.2",
+    "opencv-python>=5.0.0.93",
+    "pyautogui>=0.9.54",
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.3.0",
+    "matplotlib>=3.11.1",
+    "ruff>=0.16.4",
+]

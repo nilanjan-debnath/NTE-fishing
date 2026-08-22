@@ -28,21 +28,25 @@ def run_test():
     with mss.mss() as sct:
         monitor = sct.monitors[1]
 
+        # Pre-calculate ROI
+        w, h = monitor["width"], monitor["height"]
+        crop_h = int(h * CROP_H_PERCENT)
+        start_w = int(w * PARTITION_PERCENT / 100)
+        end_w = int(w * (100 - PARTITION_PERCENT) / 100)
+
+        roi = {
+            "top": monitor["top"],
+            "left": monitor["left"] + start_w,
+            "width": end_w - start_w,
+            "height": crop_h,
+        }
+
         while True:
-            # 1. Capture screen
-            img = np.array(sct.grab(monitor))
-            img_bgr = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+            # Capture only the necessary region
+            img = np.array(sct.grab(roi))
+            img_bgr_cropped = img[:, :, :3]  # Fast BGRA to BGR
 
-            h, w = img_bgr.shape[:2]
-
-            # 2. Apply cropping logic from utils
-            crop_h = int(h * CROP_H_PERCENT)
-            start_w = int(w * PARTITION_PERCENT / 100)
-            end_w = int(w * (100 - PARTITION_PERCENT) / 100)
-
-            img_bgr_cropped = img_bgr[0:crop_h, start_w:end_w]
-
-            # 3. Color Detection
+            # Color Detection
             hsv = cv2.cvtColor(img_bgr_cropped, cv2.COLOR_BGR2HSV)
             mask_yellow = cv2.inRange(hsv, LOWER_YELLOW, UPPER_YELLOW)
             mask_green = cv2.inRange(hsv, LOWER_GREEN, UPPER_GREEN)
@@ -50,7 +54,7 @@ def run_test():
             x_yellow = get_center_x(mask_yellow)
             x_green = get_center_x(mask_green)
 
-            # 4. Logic flow
+            # Logic flow
             if x_yellow is not None and x_green is not None:
                 print("Bars detected! Saving verification screenshot...")
 

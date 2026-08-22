@@ -23,12 +23,11 @@ from utils import (
 pyautogui.FAILSAFE = True
 
 
-# --- Shared State Object ---
 class BotState:
     def __init__(self):
         self.lock = threading.Lock()
-        self.action = None  # 'a', 'd', 'recast', or None
-        self.presses_left = 0  # How many more times to press
+        self.action = None  
+        self.presses_left = 0  
         self.is_running = True
         self.loops_remaining = LOOP_LIMIT
 
@@ -74,18 +73,27 @@ def vision_worker():
 
     with mss.mss() as sct:
         monitor = sct.monitors[1]
+        
+        # --- OPTIMIZATION: Pre-calculate the bounding box outside the loop ---
+        w, h = monitor["width"], monitor["height"]
+        crop_h = int(h * CROP_H_PERCENT)
+        start_w = int(w * PARTITION_PERCENT / 100)
+        end_w = int(w * (100 - PARTITION_PERCENT) / 100)
+        active_width = end_w - start_w
+        
+        roi = {
+            "top": monitor["top"],
+            "left": monitor["left"] + start_w,
+            "width": active_width,
+            "height": crop_h
+        }
 
         while bot_state.is_running:
-            img = np.array(sct.grab(monitor))
-            img_bgr = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-
-            h, w = img_bgr.shape[:2]
-            crop_h = int(h * CROP_H_PERCENT)
-            start_w = int(w * PARTITION_PERCENT / 100)
-            end_w = int(w * (100 - PARTITION_PERCENT) / 100)
-            img_bgr_cropped = img_bgr[0:crop_h, start_w:end_w]
-
-            active_width = end_w - start_w
+            # OPTIMIZATION: Only grab the specific Region of Interest (ROI)
+            img = np.array(sct.grab(roi))
+            
+            # OPTIMIZATION: Drop the Alpha channel using array slicing (faster than cv2.cvtColor)
+            img_bgr_cropped = img[:, :, :3]
 
             hsv = cv2.cvtColor(img_bgr_cropped, cv2.COLOR_BGR2HSV)
             mask_yellow = cv2.inRange(hsv, LOWER_YELLOW, UPPER_YELLOW)
@@ -100,9 +108,7 @@ def vision_worker():
                         in_minigame = True
                         if bot_state.loops_remaining > 0:
                             bot_state.loops_remaining -= 1
-                            print(
-                                f"[Vision] Minigame started! Remaining catches: {bot_state.loops_remaining}"
-                            )
+                            print(f"[Vision] Minigame started! Remaining catches: {bot_state.loops_remaining}")
 
                     distance = abs(x_yellow - x_green)
                     num_presses = max(1, round((distance / active_width) * 15))

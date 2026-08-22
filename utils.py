@@ -13,7 +13,7 @@ IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 # --- Configuration Variables ---
 CROP_H_PERCENT = 0.25  # 25% of the screen height
 PARTITION_PERCENT = 31  # Cuts off 31% from both left and right sides
-LOOP_LIMIT = 20  # For main.py: Set to -1 for infinite loop, or >0 for a count
+LOOP_LIMIT = 5  # For main.py: Set to -1 for infinite loop, or >0 for a count
 SCREEN_CAPTURE_DELAY = 0.05
 KEY_PRESS_DELAY = 0.01
 

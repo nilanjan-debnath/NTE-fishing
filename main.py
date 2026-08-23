@@ -5,8 +5,11 @@ import cv2
 import mss
 import numpy as np
 import pyautogui
+from pynput import keyboard
 
+from sell_and_buy import run_macro
 from utils import (
+    AUTO_SELL_AND_BUY,
     CROP_H_PERCENT,
     LOOP_LIMIT,
     LOWER_GREEN,
@@ -14,6 +17,7 @@ from utils import (
     MAX_HOLD_SECONDS,
     PARTITION_PERCENT,
     SCREEN_CAPTURE_DELAY,
+    SELL_AND_BUY_AFTER,
     UPPER_GREEN,
     UPPER_YELLOW,
     get_x_coords,
@@ -28,10 +32,31 @@ class BotState:
         self.action = None  # 'a', 'd', 'recast', or None
         self.action_end_time = 0.0  # Timestamp of when to release the key
         self.is_running = True
-        self.loops_remaining = LOOP_LIMIT
+        self.loop_limit = LOOP_LIMIT
+        self.loop_count = 0
+        self.auto_sell_and_buy = AUTO_SELL_AND_BUY
+        self.sell_and_buy_after = SELL_AND_BUY_AFTER
+
+    def loop_remains(self) -> int:
+        if self.loop_limit > 0:
+            return self.loop_limit - self.loop_count
+        else:
+            print("Script running without any limit")
+            return 99999
+
+    def should_sell_and_buy(self):
+        if self.auto_sell_and_buy:
+            return self.loop_count % self.sell_and_buy_after == 0
+        return False
 
 
 bot_state = BotState()
+
+
+def trigger_kill_switch():
+    """Callback function when Shift+Esc is pressed via pynput."""
+    print("\n[Kill Switch] 'Shift + Esc' detected! Shutting down immediately...")
+    bot_state.is_running = False
 
 
 def action_worker():
@@ -107,7 +132,7 @@ def vision_worker():
         end_w = int(w * (100 - PARTITION_PERCENT) / 100)
         active_width = end_w - start_w
 
-        deadzone_threshold = active_width * 0.02
+        # deadzone_threshold = active_width * 0.02
 
         roi = {
             "top": monitor["top"],
@@ -128,18 +153,28 @@ def vision_worker():
             c_green, l_green, r_green = get_x_coords(mask_green)
 
             with bot_state.lock:
-                if c_yellow is not None and c_green is not None and l_green is not None and r_green is not None:
+                if (
+                    c_yellow is not None
+                    and c_green is not None
+                    and l_green is not None
+                    and r_green is not None
+                ):
                     if c_yellow >= l_green and c_yellow <= r_green:
                         bot_state.action = None  # We are perfectly inside, do nothing
                     if not in_minigame:
                         in_minigame = True
-                        if bot_state.loops_remaining > 0:
-                            bot_state.loops_remaining -= 1
+                        print(f"Total catches until now {bot_state.loop_count}")
+                        bot_state.loop_count += 1
+                        if bot_state.loop_limit > 0:
                             print(
-                                f"[Vision] Minigame started! Remaining catches: {bot_state.loops_remaining}"
+                                f"[Vision] Minigame started! Remaining catches: {bot_state.loop_remains()}"
                             )
 
-                    distance = abs(c_yellow - l_green) if c_yellow < c_green else abs(c_yellow - r_green)
+                    distance = (
+                        abs(c_yellow - l_green)
+                        if c_yellow < c_green
+                        else abs(c_yellow - r_green)
+                    )
 
                     # NEW: Calculate hold duration instead of presses
                     distance_ratio = distance / active_width
@@ -155,7 +190,10 @@ def vision_worker():
                 else:
                     if in_minigame:
                         in_minigame = False
-                        if bot_state.loops_remaining == 0:
+                        if bot_state.should_sell_and_buy():
+                            run_macro()
+
+                        if bot_state.loop_remains() == 0:
                             print("[Vision] Loop limit reached. Shutting down bot...")
                             bot_state.is_running = False
                             break
@@ -167,6 +205,11 @@ def vision_worker():
 
 
 if __name__ == "__main__":
+    hotkey_listener = keyboard.GlobalHotKeys({"<shift>+<esc>": trigger_kill_switch})
+    hotkey_listener.start()
+
+    print("Kill switch active: Press 'Shift + Esc' at any time to exit.")
+
     action_thread = threading.Thread(target=action_worker, daemon=True)
     action_thread.start()
 

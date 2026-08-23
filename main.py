@@ -35,6 +35,7 @@ class BotState:
         self.loop_limit = LOOP_LIMIT
         self.loop_count = 0
         self.auto_sell_and_buy = AUTO_SELL_AND_BUY
+        self.sell_and_buy_after = SELL_AND_BUY_AFTER
 
     def loop_remains(self) -> int:
         if self.loop_limit > 0:
@@ -44,7 +45,9 @@ class BotState:
             return 99999
 
     def should_sell_and_buy(self):
-        return self.loop_count % SELL_AND_BUY_AFTER == 0
+        if self.auto_sell_and_buy:
+            return self.loop_count % self.sell_and_buy_after == 0
+        return False
 
 
 bot_state = BotState()
